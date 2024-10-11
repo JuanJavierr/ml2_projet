@@ -23,16 +23,19 @@ def plot_mrc(mrc_name):
 
 
 def map_mrc(mrc_name):
-    mrc = geo_df[geo_df["MRS_NM_MRC"] == mrc_name]
+    mrc = geo_df
     center = mrc.geometry.centroid
     deck = pdk.Deck(
         layers=[
             pdk.Layer(
                 "GeoJsonLayer",
+                id="geojson",
                 data=mrc,
                 auto_highlight=True,
                 opacity=0.6,
                 get_fill_color=[255, 255, 255],
+                stroked=True,
+                pickable=True,
             ),
         ],
         map_style=None,
@@ -42,6 +45,10 @@ def map_mrc(mrc_name):
             zoom=6,
             pitch=0,
         ),
+        tooltip={
+            "html": "<b>{MRS_NM_MRC}</b>",
+            "style": {"color": "white"},
+        },
     )
     return deck
 
@@ -54,11 +61,13 @@ mrc_name = st.selectbox("Choose a MRC", mrc_list, index=2)
 
 
 col1, col2 = st.columns(2)
+with col2:
+    event = st.pydeck_chart(
+        map_mrc(mrc_name),
+        on_select="rerun",
+    )
+    event.selection
 
-if mrc_name is not None:
-    with col1:
-        st.plotly_chart(plot_mrc(mrc_name))
-    with col2:
-        st.pydeck_chart(map_mrc(mrc_name))
-
+with col1:
+    st.plotly_chart(plot_mrc(mrc_name))
 # %%
