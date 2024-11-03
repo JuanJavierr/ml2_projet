@@ -1,4 +1,3 @@
-# %%
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
@@ -24,6 +23,7 @@ def get_consumption_for(df: pd.DataFrame, mrc, sector):
 
     # Standardize column names
     df = df.rename(columns={"Total (kWh)": "total_kwh"})
+    df["total_mwh"] = df["total_kwh"] / 1000
 
     # Set frequency
     df = df.dropna().asfreq("MS")
@@ -34,13 +34,6 @@ def get_consumption_for(df: pd.DataFrame, mrc, sector):
     return df.dropna()
 
 
-df = load_data()
-df = get_consumption_for(df, "Maria-Chapdelaine", "RÉSIDENTIEL")  # Abitibi
-train_df = df["2016":"2022"]
-test_df = df["2023":]
-
-
-# %%
 def acf_pacf(series: pd.Series):
     fig, axes = plt.subplots(1, 2, figsize=(15, 4))
 
@@ -50,14 +43,9 @@ def acf_pacf(series: pd.Series):
     plt.show()
 
 
-acf_pacf(df["total_kwh"])
-
-
-# %%
 def test_models(df):
-    aic_full = pd.DataFrame(np.zeros((6, 6), dtype=float))
-    mse_full = pd.DataFrame(np.zeros((6, 6), dtype=float))
-    y, X = patsy.dmatrices("total_kwh ~ month", data=df, return_type="dataframe")
+    results = []
+    y, X = patsy.dmatrices("total_mwh ~ month", data=df, return_type="dataframe")
 
     for p in range(3):
         for q in range(3):
@@ -72,36 +60,32 @@ def test_models(df):
                 # enforce_invertibility=False,
             )
             res = model.fit(disp=False)
-            aic_full.iloc[p, q] = res.aic
-            mse_full.iloc[p, q] = (
-                res.fittedvalues.sub(y["total_kwh"]).pow(2)[12:].mean()
-            )
+            results.append([p, q, res.aic])
 
-    print(aic_full)
-    print(mse_full)
+    best_p, best_q = (
+        pd.DataFrame(results, columns=["p", "q", "aic"])
+        .set_index(["p", "q"])
+        .idxmin()
+        .at["aic"]
+    )
+
+    return best_p, best_q
 
 
-test_models(train_df)
+def fit_model(train_df, p, q):
 
-
-# %%
-def fit_model():
-
-    y, X = patsy.dmatrices("total_kwh ~ month", data=train_df, return_type="dataframe")
+    y, X = patsy.dmatrices("total_mwh ~ month", data=train_df, return_type="dataframe")
 
     model = sm.tsa.statespace.SARIMAX(
         endog=y,
         exog=X,
-        order=(1, 1, 2),
-        seasonal_order=(1, 1, 2, 12),
+        order=(p, 1, q),
+        seasonal_order=(p, 1, q, 12),
         # enforce_invertibility=False,
     )
     res = model.fit(disp=False)
 
     return res
-
-
-model = fit_model()
 
 
 def plot_residuals(res):
@@ -112,56 +96,27 @@ def plot_residuals(res):
     fig.show()
 
 
-def plot_predictions(df):
-    fig = px.line(
-        df,
-        x=df.index,
-        y=["total_kwh", "fitted_values"],
-        title="Total consumption vs forecast",
-    )
-    fig.show()
-
-
-df["fitted_values"] = model.fittedvalues[12:]
-plot_predictions(df)
-# plot_residuals(model)
-
-# %%
-
-model.plot_diagnostics()
-
-
-# %%
 def forecast(model, df):
-    y, X = patsy.dmatrices("total_kwh ~ month", data=df, return_type="dataframe")
+    y, X = patsy.dmatrices("total_mwh ~ month", data=df, return_type="dataframe")
 
     # Get month-ahead forecast for each month in the test set
     forecast = model.get_prediction(start=df.index.min(), end=df.index.max(), exog=X)
-    return forecast
+
+    mse = forecast.predicted_mean.sub(y["total_mwh"]).pow(2).mean()
+    return forecast, mse
 
 
-fore = forecast(model, test_df)
-fore = fore.summary_frame().drop(columns=["mean_se"])
-# Plot forecast (with confidence intervals) against actual data
-fig = px.line(
-    data_frame=fore.join(test_df),
-    x=fore.index,
-    y=["total_kwh", "mean", "mean_ci_lower", "mean_ci_upper"],
-    title="Forecast",
-)
-fig.show()
-
-
-# %%
-def plot_predictions():
+def plot_predictions(test_df, fore):
     import plotly.graph_objects as go
+
+    fore = fore.summary_frame().drop(columns=["mean_se"])
 
     # Plot forecast (with confidence intervals) against actual data
     fig = go.Figure()
 
     # Add actual data
     fig.add_trace(
-        go.Scatter(x=test_df.index, y=test_df["total_kwh"], mode="lines", name="Actual")
+        go.Scatter(x=test_df.index, y=test_df["total_mwh"], mode="lines", name="Actual")
     )
 
     # Add forecasted mean
@@ -189,8 +144,26 @@ def plot_predictions():
         yaxis_title="Total kWh",
     )
 
+    return fig
+
+
+if __name__ == "__main__":
+    df = load_data()
+    df = get_consumption_for(df, "Maria-Chapdelaine", "RÉSIDENTIEL")  # Abitibi
+    train_df = df["2016":"2022"]
+    test_df = df["2023":]
+
+    acf_pacf(df["total_mwh"])
+
+    best_p, best_q = test_models(train_df)
+
+    model = fit_model(train_df, best_p, best_q)
+
+    # df["fitted_values"] = model.fittedvalues[12:]
+    # plot_residuals(model)
+
+    model.plot_diagnostics()
+
+    fore, mse = forecast(model, test_df)
+    fig = plot_predictions(test_df, fore)
     fig.show()
-
-
-plot_predictions()
-# %%
