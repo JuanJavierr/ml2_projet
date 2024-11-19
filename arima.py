@@ -1,17 +1,33 @@
+# %%
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 import statsmodels.api as sm
 import numpy as np
 import patsy
+import warnings
+
+from meteostatt import df as weather_df
+
+warnings.filterwarnings("ignore")
+
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+# Send all print statements to the logger in addition to the console
+logger = logging.getLogger()
+logger.addHandler(logging.FileHandler("arima.log", mode="w"))
 
 
 def load_data():
     df = pd.read_excel("consommation-historique-mrc-11mars2024.xlsx")
+    df = df.dropna(subset=["MRC_TXT"])
 
     return df
 
 
+# %%
 def get_consumption_for(df: pd.DataFrame, mrc, sector):
     # Filter
     df = df[(df["MRC_TXT"] == mrc) & (df["SECTEUR"] == sector)]
@@ -31,6 +47,7 @@ def get_consumption_for(df: pd.DataFrame, mrc, sector):
     # Add helper columns
     df["month"] = df.index.month.astype(str)
 
+    df = pd.merge(df, weather_df, left_index=True, right_index=True)
     return df.dropna()
 
 
@@ -43,9 +60,9 @@ def acf_pacf(series: pd.Series):
     plt.show()
 
 
-def test_models(df):
+def test_models(df, formula):
     results = []
-    y, X = patsy.dmatrices("total_mwh ~ month", data=df, return_type="dataframe")
+    y, X = patsy.dmatrices(formula, data=df, return_type="dataframe")
 
     for p in range(3):
         for q in range(3):
@@ -72,9 +89,9 @@ def test_models(df):
     return best_p, best_q
 
 
-def fit_model(train_df, p, q):
+def fit_model(train_df, p, q, formula):
 
-    y, X = patsy.dmatrices("total_mwh ~ month", data=train_df, return_type="dataframe")
+    y, X = patsy.dmatrices(formula, data=train_df, return_type="dataframe")
 
     model = sm.tsa.statespace.SARIMAX(
         endog=y,
@@ -96,14 +113,14 @@ def plot_residuals(res):
     fig.show()
 
 
-def forecast(model, df):
-    y, X = patsy.dmatrices("total_mwh ~ month", data=df, return_type="dataframe")
+def forecast(model, df, formula):
+    y, X = patsy.dmatrices(formula, data=df, return_type="dataframe")
 
     # Get month-ahead forecast for each month in the test set
     forecast = model.get_prediction(start=df.index.min(), end=df.index.max(), exog=X)
 
-    mse = forecast.predicted_mean.sub(y["total_mwh"]).pow(2).mean()
-    return forecast, mse
+    rmse = (forecast.predicted_mean.sub(y["total_mwh"])**2).mean()**0.5
+    return forecast, rmse
 
 
 def plot_predictions(test_df, fore):
@@ -148,22 +165,45 @@ def plot_predictions(test_df, fore):
 
 
 if __name__ == "__main__":
-    df = load_data()
-    df = get_consumption_for(df, "Maria-Chapdelaine", "RÉSIDENTIEL")  # Abitibi
-    train_df = df["2016":"2022"]
-    test_df = df["2023":]
 
-    acf_pacf(df["total_mwh"])
+    formulas = {
+        "month": "total_mwh ~ month",
+        "mean_temp__month": "total_mwh ~ mean_temp + month",
+    }
 
-    best_p, best_q = test_models(train_df)
 
-    model = fit_model(train_df, best_p, best_q)
+    full_df = load_data()
+    results_df = pd.DataFrame()
+    results_df["MRC"] = full_df["MRC_TXT"].unique()
+    for results_col, formula in formulas.items():
+        for mrc in full_df["MRC_TXT"].unique():
+            df = get_consumption_for(full_df, mrc, "RÉSIDENTIEL")  # Abitibi
+            train_df = df["2016":"2022"]
+            test_df = df["2023":]
 
-    # df["fitted_values"] = model.fittedvalues[12:]
-    # plot_residuals(model)
+            # acf_pacf(df["total_mwh"])
 
-    model.plot_diagnostics()
+            try:
+                best_p, best_q = test_models(train_df, formula=formula)
 
-    fore, mse = forecast(model, test_df)
-    fig = plot_predictions(test_df, fore)
-    fig.show()
+                model = fit_model(train_df, best_p, best_q, formula=formula)
+
+                # df["fitted_values"] = model.fittedvalues[12:]
+                # plot_residuals(model)
+
+                # model.plot_diagnostics()
+
+                fore, rmse = forecast(model, test_df, formula)
+                fig = plot_predictions(test_df, fore)
+
+                with open(f"./plots/forecast_{mrc}.html", "w") as f:
+                    f.write(fig.to_html())
+                logger.info(f"MRC: {mrc}, RMSE: {rmse}")
+                logger.info(f"Best p: {best_p}, Best q: {best_q}")
+                results_df.loc[results_df["MRC"] == mrc, results_col] = rmse
+            except Exception as e:
+                logger.error(f"Error for MRC: {mrc}, {e}")
+                continue
+
+    results_df.to_csv("results.csv", index=False)
+    

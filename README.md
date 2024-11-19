@@ -7,3 +7,5 @@
   - Ecq AIC bon critère de comparaison?
   - Ecq on devrait tester pour plus d'ordres?
 - Interface graphique??
+- Census Data
+- Identifier architecture modèle deep learning
