@@ -1,12 +1,16 @@
-# %%
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import geopandas as gpd
 import pydeck as pdk
+import arima
 
-df = pd.read_excel("consommation-historique-mrc-11mars2024.xlsx")
+df = arima.load_data()
 geo_df = gpd.read_file("./SHP/mrc_s.shp")
+
+# Reduce polygon's complexity
+geo_df["geometry"] = geo_df.simplify(0.001)
+
 mrc = geo_df[geo_df["MRS_NM_MRC"] == "Rouville"]
 
 
@@ -32,8 +36,8 @@ def map_mrc(mrc_name):
                 id="geojson",
                 data=mrc,
                 auto_highlight=True,
-                opacity=0.6,
-                get_fill_color=[255, 255, 255],
+                opacity=0.5,
+                get_fill_color=[0, 0, 255],
                 stroked=True,
                 pickable=True,
             ),
@@ -42,7 +46,7 @@ def map_mrc(mrc_name):
         initial_view_state=pdk.ViewState(
             latitude=float(center.y.iloc[0]),
             longitude=float(center.x.iloc[0]),
-            zoom=6,
+            zoom=4,
             pitch=0,
         ),
         tooltip={
@@ -70,4 +74,13 @@ with col2:
 
 with col1:
     st.plotly_chart(plot_mrc(mrc_name))
-# %%
+
+
+sector_df = arima.get_consumption_for(df, mrc_name, "RÉSIDENTIEL")
+train_df = sector_df["2016":"2022"]
+test_df = sector_df["2023":]
+model = arima.fit_model(train_df, 1, 2)
+fore, mse = arima.forecast(model, test_df)
+fig = arima.plot_predictions(test_df, fore)
+st.plotly_chart(fig)
+st.write("Mean Squared Error: ", mse)
