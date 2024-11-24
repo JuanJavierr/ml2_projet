@@ -182,7 +182,7 @@ if __name__ == "__main__":
     # full_df = load_data()
     full_df = pd.read_csv("dataset.csv")
     results_df = pd.DataFrame()
-    results_df["MRC"] = full_df["mrc"].unique()
+    results_df[["MRC", "SECTOR"]] = full_df[["mrc", "sector"]].drop_duplicates()
 
     for results_col, formula in formulas.items():
         for mrc in full_df["mrc"].unique():
@@ -191,28 +191,29 @@ if __name__ == "__main__":
                 train_df = df["2016":"2022"]
                 test_df = df["2023":]
 
-                # try:
-                best_p, best_q = test_models(train_df, formula=formula)
+                try:
+                    best_p, best_q = test_models(train_df, formula=formula)
 
-                model = fit_model(train_df, best_p, best_q, formula=formula)
+                    model = fit_model(train_df, best_p, best_q, formula=formula)
 
-                # df["fitted_values"] = model.fittedvalues[12:]
-                # plot_residuals(model)
+                    # df["fitted_values"] = model.fittedvalues[12:]
+                    # plot_residuals(model)
 
-                # model.plot_diagnostics()
+                    # model.plot_diagnostics()
 
-                fore, rmse, mape = forecast(model, test_df, formula)
-                # fig = plot_predictions(test_df, fore)
+                    fore, rmse, mape = forecast(model, test_df, formula)
+                    # fig = plot_predictions(test_df, fore)
 
-                # with open(f"./plots/forecast_{mrc}.html", "w") as f:
-                #     f.write(fig.to_html())
-                logger.info(f"MRC: {mrc}, SECTOR: {sector},  RMSE: {rmse}, MAPE: {mape}")
-                logger.info(f"Best p: {best_p}, Best q: {best_q}")
-                results_df.loc[results_df["MRC"] == mrc, results_col+"_rmse"] = rmse
-                results_df.loc[results_df["MRC"] == mrc, results_col+"_mape"] = mape
-                # except Exception as e:
-                #     logger.error(f"Error for MRC: {mrc}, {e}")
-                #     continue
+                    # with open(f"./plots/forecast_{mrc}.html", "w") as f:
+                    #     f.write(fig.to_html())
+                    logger.info(f"MRC: {mrc}, SECTOR: {sector},  RMSE: {rmse}, MAPE: {mape}")
+                    logger.info(f"Best p: {best_p}, Best q: {best_q}")
+                    results_df.loc[((results_df["MRC"] == mrc) & (results_df["SECTOR"] == sector)), results_col+"_rmse"] = rmse
+                    results_df.loc[((results_df["MRC"] == mrc) & (results_df["SECTOR"] == sector)), results_col+"_mape"] = mape
+                except Exception as e:
+                    logger.error(f"Error for MRC: {mrc}, {sector}, {e}")
+                    continue
 
     results_df.to_csv("results.csv", index=False)
     
+# %%
