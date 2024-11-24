@@ -21,15 +21,16 @@ from sklearn import preprocessing
 
 # %% 
 # 1. Lire le fichier csv
-data = pd.read_excel("consommation-historique-mrc-11mars2024.xlsx")
+data = pd.read_csv('dataset.csv')
+data.head()
 
 # %%
 # 2. Afficher le contenu pour l'analyser
 display(data.head(25))
-print(f"Les MRC presents : {data['MRC_TXT'].unique()}")
+print(f"Les MRC presents : {data['mrc'].unique()}")
 
-mask1 = data['MRC_TXT'] == 'Rouville' # focus sur Rouville
-mask2 = data['SECTEUR'] == 'AGRICOLE' # focus sur Besoin Agricole
+mask1 = data['mrc'] == 'Rouville' # focus sur Rouville
+mask2 = data['sector'] == 'AGRICOLE' # focus sur Besoin Agricole
 Rouville = data[mask1 & mask2]
 Rouville.shape
 
@@ -49,12 +50,20 @@ df = Rouville.copy()
 
 # # Normalisation ici....
 # df_restant = df.drop(columns=['Total (kWh)'], axis=1)
-# scaler = preprocessing.StandardScaler()
+scaler = preprocessing.StandardScaler()
 # df_restant = scaler.fit_transform(df_restant)
 
 # df = np.concatenate([df_open , df_restant], axis=1)**
 
-df = df[['Total (kWh)']].copy()
+df = df[['total_kwh','tavg']].copy()
+
+df['tavg'] = scaler.fit_transform(df[['tavg']])
+df['tavg_diff'] = df['tavg'].diff().fillna(0)
+
+df['total_kwh'] = np.log(df['total_kwh'])
+df['total_kwh_diff'] = df['total_kwh'] .diff().fillna(0)
+
+display(df)
 
 
 df_train =  df[ 0 : int(0.8 * df.shape[0]) ] # df[ 0 : int(0.8 * df.shape[0]) , : ]
@@ -125,7 +134,7 @@ def create_model(input_shape, output_shape):
 
 # Creer une instance du modele
 model = create_model(
-    input_shape = (11, 1),
+    input_shape = (11, 4),
     output_shape = 1)
 
 model.summary()
@@ -186,10 +195,11 @@ plt.show()
 
 # 7.1. Générer des prédictions sur l'ensemble des données
 full_generator = Generateur(df, batch_size=1)  
-full_predictions = model.predict(full_generator)
+full_predictions = model.predict(full_generator) 
+full_predictions = np.exp(full_predictions)
 
 # 7.2 Récupérer les vraies valeurs de `y` pour tout le dataset
-true_values_full = full_generator.y
+true_values_full = np.exp(full_generator.y)
 
 # %% 
 # 8. Visualiser les résultats avec Matplotlib/px
