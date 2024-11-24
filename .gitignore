@@ -2,5 +2,4 @@ venv/*
 .DS_Store
 *.pyc
 SHP/*
-plots
-**.log
+consommation-historique-mrc-11mars2024.xlsx
