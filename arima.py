@@ -8,7 +8,7 @@ import numpy as np
 import patsy
 import warnings
 
-from meteostatt import df as weather_df
+# from meteostatt import df as weather_df
 
 warnings.filterwarnings("ignore")
 
@@ -23,31 +23,36 @@ logger.addHandler(logging.FileHandler("arima.log", mode="w"))
 def load_data():
     df = pd.read_excel("consommation-historique-mrc-11mars2024.xlsx")
     df = df.dropna(subset=["MRC_TXT"])
+    df = df.set_index(df["ANNEE_MOIS"].infer_objects()).sort_index()
+    df = df.rename(columns={"Total (kWh)": "total_kwh"})
 
     return df
 
 
 # %%
 def get_consumption_for(df: pd.DataFrame, mrc, sector):
-    # Filter
-    df = df[(df["MRC_TXT"] == mrc) & (df["SECTEUR"] == sector)]
-
-    # Convert types
-    df.loc[:, "Total (kWh)"] = df["Total (kWh)"].astype(float)
-    df.loc[:, "ANNEE_MOIS"] = pd.to_datetime(df["ANNEE_MOIS"])
-    df = df.set_index(df["ANNEE_MOIS"].infer_objects()).sort_index()
-
-    # Standardize column names
-    df = df.rename(columns={"Total (kWh)": "total_kwh"})
-    df["total_mwh"] = df["total_kwh"] / 1000
-
-    # Set frequency
-    df = df.dropna().asfreq("MS")
-
-    # Add helper columns
+    # # Filter
+    df = df[(df["mrc"] == mrc) & (df["sector"] == sector)]
+    df = df.set_index(pd.to_datetime(df["date"], format="%Y-%m-%d")).sort_index()
     df["month"] = df.index.month.astype(str)
+    return df
 
-    df = pd.merge(df, weather_df, left_index=True, right_index=True)
+    # # Convert types
+    # # df.loc[:, "Total (kWh)"] = df["Total (kWh)"].astype(float)
+    # df.loc[:, "ANNEE_MOIS"] = pd.to_datetime(df["ANNEE_MOIS"])
+    # df = df.set_index(df["ANNEE_MOIS"].infer_objects()).sort_index()
+
+    # # Standardize column names
+    # df["total_mwh"] = df["total_kwh"] / 1000
+
+    # # Set frequency
+    # df = df.dropna().asfreq("MS")
+
+    # # Add helper columns
+    # df["month"] = df.index.month.astype(str)
+
+    # weather_df = pd.read_csv("weather.csv")
+    # df = pd.merge(df, weather_df, left_index=True, right_index=True)
     return df.dropna()
 
 
@@ -113,14 +118,16 @@ def plot_residuals(res):
     fig.show()
 
 
-def forecast(model, df, formula):
-    y, X = patsy.dmatrices(formula, data=df, return_type="dataframe")
-
+def forecast(model, test_df, formula):
+    y, X = patsy.dmatrices(formula, data=test_df, return_type="dataframe")
+    
+    forecast = model.forecast(steps=12, exog=X)
     # Get month-ahead forecast for each month in the test set
-    forecast = model.get_prediction(start=df.index.min(), end=df.index.max(), exog=X)
-
-    rmse = (forecast.predicted_mean.sub(y["total_mwh"])**2).mean()**0.5
-    return forecast, rmse
+    # forecast = model.get_prediction(start="2023-01-01", end="2023-12-01", exog=X)
+    forecast.index = y.index
+    rmse = (forecast.sub(y["total_kwh"])**2).mean()**0.5
+    mape = (forecast.sub(y["total_kwh"]).abs() / y["total_kwh"]).mean()
+    return forecast, rmse, mape
 
 
 def plot_predictions(test_df, fore):
@@ -133,7 +140,7 @@ def plot_predictions(test_df, fore):
 
     # Add actual data
     fig.add_trace(
-        go.Scatter(x=test_df.index, y=test_df["total_mwh"], mode="lines", name="Actual")
+        go.Scatter(x=test_df.index, y=test_df["total_kwh"], mode="lines", name="Actual")
     )
 
     # Add forecasted mean
@@ -163,27 +170,28 @@ def plot_predictions(test_df, fore):
 
     return fig
 
-
+# %%
 if __name__ == "__main__":
 
     formulas = {
-        "month": "total_mwh ~ month",
-        "mean_temp__month": "total_mwh ~ mean_temp + month",
+        # "month": "total_kwh ~ month",
+        "mean_temp__month": "total_kwh ~ tavg + month",
     }
 
 
-    full_df = load_data()
+    # full_df = load_data()
+    full_df = pd.read_csv("dataset.csv")
     results_df = pd.DataFrame()
-    results_df["MRC"] = full_df["MRC_TXT"].unique()
+    results_df["MRC"] = full_df["mrc"].unique()
+
     for results_col, formula in formulas.items():
-        for mrc in full_df["MRC_TXT"].unique():
-            df = get_consumption_for(full_df, mrc, "RÉSIDENTIEL")  # Abitibi
-            train_df = df["2016":"2022"]
-            test_df = df["2023":]
+        for mrc in full_df["mrc"].unique():
+            for sector in full_df["sector"].unique():
+                df = get_consumption_for(full_df, mrc, sector)  # Abitibi
+                train_df = df["2016":"2022"]
+                test_df = df["2023":]
 
-            # acf_pacf(df["total_mwh"])
-
-            try:
+                # try:
                 best_p, best_q = test_models(train_df, formula=formula)
 
                 model = fit_model(train_df, best_p, best_q, formula=formula)
@@ -193,17 +201,18 @@ if __name__ == "__main__":
 
                 # model.plot_diagnostics()
 
-                fore, rmse = forecast(model, test_df, formula)
-                fig = plot_predictions(test_df, fore)
+                fore, rmse, mape = forecast(model, test_df, formula)
+                # fig = plot_predictions(test_df, fore)
 
-                with open(f"./plots/forecast_{mrc}.html", "w") as f:
-                    f.write(fig.to_html())
-                logger.info(f"MRC: {mrc}, RMSE: {rmse}")
+                # with open(f"./plots/forecast_{mrc}.html", "w") as f:
+                #     f.write(fig.to_html())
+                logger.info(f"MRC: {mrc}, SECTOR: {sector},  RMSE: {rmse}, MAPE: {mape}")
                 logger.info(f"Best p: {best_p}, Best q: {best_q}")
-                results_df.loc[results_df["MRC"] == mrc, results_col] = rmse
-            except Exception as e:
-                logger.error(f"Error for MRC: {mrc}, {e}")
-                continue
+                results_df.loc[results_df["MRC"] == mrc, results_col+"_rmse"] = rmse
+                results_df.loc[results_df["MRC"] == mrc, results_col+"_mape"] = mape
+                # except Exception as e:
+                #     logger.error(f"Error for MRC: {mrc}, {e}")
+                #     continue
 
     results_df.to_csv("results.csv", index=False)
     
