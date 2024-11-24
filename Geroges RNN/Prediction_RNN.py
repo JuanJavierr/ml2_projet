@@ -125,7 +125,7 @@ def create_model(input_shape, output_shape):
 
 # Creer une instance du modele
 model = create_model(
-    input_shape = (5, 1),
+    input_shape = (11, 1),
     output_shape = 1)
 
 model.summary()
@@ -236,7 +236,7 @@ def create_sequences(data, time_steps):
     return np.array(X), np.array(y)
 
 # Paramètres
-time_steps = 5  # Longueur de chaque séquence
+time_steps = 10  # Longueur de chaque séquence
 vec_len = 1      # Nombre de caractéristiques
 
 # Transformez les données d'entraînement
@@ -318,3 +318,4 @@ plt.show()
 
 
 # %%
+
