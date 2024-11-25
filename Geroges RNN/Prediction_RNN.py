@@ -185,6 +185,8 @@ plt.grid(True)
 # Afficher les graphes
 plt.tight_layout()
 plt.show()
+
+print("Done")
 # %%
 # Note: On peut rajouter les predicteurs a volonte...
 
@@ -286,6 +288,8 @@ y_test = y_test.reshape(-1, 1)
 
 # Évaluation du modèle
 y_pred = auto_model.predict(X_test)
+y_pred = np.exp(y_pred)
+mape = (abs(y_test - y_pred) / abs(y_test)).mean()
 print("Performance:", auto_model.evaluate(X_test, y_test))
 
 # %%
