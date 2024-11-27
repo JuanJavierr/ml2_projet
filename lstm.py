@@ -7,20 +7,36 @@ from arima import load_data, get_consumption_for
 from typing import Callable
 import plotly.express as px
 from sklearn.preprocessing import StandardScaler
+import wandb
+
+# # start a new wandb run to track this script
+# wandb.init(
+#     # set the wandb project where this run will be logged
+#     project="ml2-project",
+
+#     # track hyperparameters and run metadata
+#     config={
+#     "learning_rate": 0.02,
+#     "architecture": "LSTM",
+#     "dataset": "hydro",
+#     "epochs": 10,
+#     }
+# )
+
 
 torch.manual_seed(1)
 
 df = load_data()
-df = get_consumption_for(df, "Abitibi", "RÉSIDENTIEL")
+# df = get_consumption_for(df, "Abitibi", "RÉSIDENTIEL")
 
-df = df[["total_mwh", "month"]].astype("int")
+df = df[["total_kwh", "month"]].astype("int")
+scaler = StandardScaler(with_mean=False)
+df = scaler.fit_transform(df)
 
 train_df = df["2016":"2022"]
 test_df = df["2023":]
 
 
-scaler = StandardScaler(with_mean=False)
-df = scaler.fit_transform(df)
 
 # Convert to tensor
 def convert_to_tensor(df):

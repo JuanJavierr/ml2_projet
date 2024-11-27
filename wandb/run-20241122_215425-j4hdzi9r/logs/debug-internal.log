@@ -1,0 +1,8 @@
+{"time":"2024-11-22T21:54:28.315337-05:00","level":"INFO","msg":"using version","core version":"0.18.7"}
+{"time":"2024-11-22T21:54:28.315364-05:00","level":"INFO","msg":"created symlink","path":"/Users/Xavier/ml2_projet/wandb/run-20241122_215425-j4hdzi9r/logs/debug-core.log"}
+{"time":"2024-11-22T21:54:28.427909-05:00","level":"INFO","msg":"created new stream","id":"j4hdzi9r"}
+{"time":"2024-11-22T21:54:28.427952-05:00","level":"INFO","msg":"stream: started","id":"j4hdzi9r"}
+{"time":"2024-11-22T21:54:28.42796-05:00","level":"INFO","msg":"handler: started","stream_id":"j4hdzi9r"}
+{"time":"2024-11-22T21:54:28.427977-05:00","level":"INFO","msg":"sender: started","stream_id":"j4hdzi9r"}
+{"time":"2024-11-22T21:54:28.427989-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"j4hdzi9r"}
+{"time":"2024-11-22T21:54:28.658947-05:00","level":"INFO","msg":"Starting system monitor"}

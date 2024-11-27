@@ -127,7 +127,7 @@ def forecast(model, test_df, formula):
     forecast.index = y.index
     rmse = (forecast.sub(y["total_kwh"])**2).mean()**0.5
     mape = (forecast.sub(y["total_kwh"]).abs() / y["total_kwh"]).mean()
-    return forecast, rmse, mape
+    return forecast, rmse, mape, y
 
 
 def plot_predictions(test_df, fore):
@@ -183,12 +183,13 @@ if __name__ == "__main__":
     full_df = pd.read_csv("dataset.csv")
     results_df = pd.DataFrame()
     results_df[["MRC", "SECTOR"]] = full_df[["mrc", "sector"]].drop_duplicates()
-
+    models = {}
     for results_col, formula in formulas.items():
-        for mrc in full_df["mrc"].unique():
+        for mrc in ["Drummond", "Les Etchemins"]:
             for sector in full_df["sector"].unique():
                 df = get_consumption_for(full_df, mrc, sector)  # Abitibi
-                train_df = df["2016":"2022"]
+                train_df = df["2016":"2021"]
+                validation_df = df["2022":"2022"]
                 test_df = df["2023":]
 
                 try:
@@ -201,7 +202,7 @@ if __name__ == "__main__":
 
                     # model.plot_diagnostics()
 
-                    fore, rmse, mape = forecast(model, test_df, formula)
+                    fore, rmse, mape, y = forecast(model, validation_df, formula)
                     # fig = plot_predictions(test_df, fore)
 
                     # with open(f"./plots/forecast_{mrc}.html", "w") as f:
@@ -210,10 +211,39 @@ if __name__ == "__main__":
                     logger.info(f"Best p: {best_p}, Best q: {best_q}")
                     results_df.loc[((results_df["MRC"] == mrc) & (results_df["SECTOR"] == sector)), results_col+"_rmse"] = rmse
                     results_df.loc[((results_df["MRC"] == mrc) & (results_df["SECTOR"] == sector)), results_col+"_mape"] = mape
+
+                    models[(mrc, sector)] = [model, best_p, best_q]
+                    
+                
                 except Exception as e:
                     logger.error(f"Error for MRC: {mrc}, {sector}, {e}")
                     continue
 
-    results_df.to_csv("results.csv", index=False)
+    results_df.to_csv("results2.csv", index=False)
     
+# %%
+import plotly.express as px
+import plotly.graph_objects as go
+
+for (mrc, sector), (model, best_p, best_q) in models.items():
+    df = get_consumption_for(full_df, mrc, sector)  # Abitibi
+    train_df = df["2016":"2022"]
+    test_df = df["2023":]
+
+    formula = formulas["mean_temp__month"]
+
+    model = fit_model(train_df, best_p, best_q, formula=formula)
+
+    fore, rmse, mape, y = forecast(model, test_df, formula)
+    
+    # Plot forecast vs actual
+    fig = px.line(fore.rename("Prédiction"), title=f"{mrc} - {sector}")
+    fig.add_trace(go.Scatter(x=y.index, y=y["total_kwh"], mode="lines", name="Valeurs réelles"))
+    fig.update_layout(legend_title_text="Légende", title=f"Consommation mensuelle pour la MRC de {mrc} - Secteur {sector}", yaxis_title="Valeur (kWh)", xaxis_title="Date")
+    fig.show()
+
+    y["forecast"] = fore
+    y.to_csv(f"arima_predictions/{mrc}_{sector}.csv")
+
+
 # %%

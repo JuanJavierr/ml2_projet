@@ -1,0 +1,19 @@
+{"time":"2024-11-22T21:53:14.555978-05:00","level":"INFO","msg":"using version","core version":"0.18.7"}
+{"time":"2024-11-22T21:53:14.556066-05:00","level":"INFO","msg":"created symlink","path":"/Users/Xavier/ml2_projet/wandb/run-20241122_215314-elcs2r56/logs/debug-core.log"}
+{"time":"2024-11-22T21:53:14.874895-05:00","level":"INFO","msg":"created new stream","id":"elcs2r56"}
+{"time":"2024-11-22T21:53:14.874975-05:00","level":"INFO","msg":"stream: started","id":"elcs2r56"}
+{"time":"2024-11-22T21:53:14.875003-05:00","level":"INFO","msg":"handler: started","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:53:14.875026-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:53:14.875061-05:00","level":"INFO","msg":"sender: started","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:53:15.166835-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2024-11-22T21:53:16.576944-05:00","level":"INFO","msg":"Pausing system monitor"}
+{"time":"2024-11-22T21:54:25.609825-05:00","level":"INFO","msg":"Resuming system monitor"}
+{"time":"2024-11-22T21:54:25.804998-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2024-11-22T21:54:25.805487-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2024-11-22T21:54:26.810375-05:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"saving job artifact","runtime_seconds":0.929935667}],"total_operations":1}}
+{"time":"2024-11-22T21:54:27.177049-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2024-11-22T21:54:28.313005-05:00","level":"INFO","msg":"stream: closing","id":"elcs2r56"}
+{"time":"2024-11-22T21:54:28.313045-05:00","level":"INFO","msg":"handler: closed","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:54:28.313059-05:00","level":"INFO","msg":"sender: closed","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:54:28.313055-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":"elcs2r56"}
+{"time":"2024-11-22T21:54:28.313161-05:00","level":"INFO","msg":"stream: closed","id":"elcs2r56"}
