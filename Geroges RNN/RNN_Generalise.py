@@ -16,11 +16,24 @@ import plotly.express as px
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import plotly.graph_objects as go 
+import random
+
 from sklearn import preprocessing
+from tensorflow.keras.callbacks import EarlyStopping
+
+SEED = 42
+np.random.seed(SEED)
+random.seed(SEED)
+tf.random.set_seed(SEED)
+
 %matplotlib inline
 
 # %% 1. Lire le fichier csv
 data = pd.read_csv('dataset.csv')
+data = data[(data['mrc'] == 'Drummond') | (data['mrc'] == 'Les Etchemins')] # on selectionne les mrc souhaitees
+data['mrc'].unique()
 
 # %%
 # 2. Afficher le contenu pour l'analyser
@@ -38,23 +51,34 @@ def preprocess_data(data, mrc_sector='AGRICOLEAbitibi'):
     """Prépare les données pour un MRC donné."""
     mask = data['sector_mrc'] == mrc_sector
     filtered_data = data[mask].copy()
-    
-    # Supprimer les colonnes inutiles (adapter selon vos besoins)
+
+    # Supprimer les colonnes inutiles
     filtered_data = filtered_data[['total_kwh', 'tavg']].copy()
-    
+
     # Normalisation et transformations
     scaler = preprocessing.StandardScaler()
     filtered_data['tavg'] = scaler.fit_transform(filtered_data[['tavg']])
     filtered_data['tavg_diff'] = filtered_data['tavg'].diff().fillna(0)
     filtered_data['total_kwh'] = np.log(filtered_data['total_kwh'])
     filtered_data['total_kwh_diff'] = filtered_data['total_kwh'].diff().fillna(0)
-  
+    
+    filtered_data_footer = filtered_data.iloc[int(0.875 * filtered_data.shape[0]):, :]
+    filtered_data_header = filtered_data.iloc[ : 84]
     
     # Split train/test
-    df_train =  filtered_data[ 0 : int(0.8 * filtered_data.shape[0]) ] 
-    df_test =   filtered_data[  int(0.8 * filtered_data.shape[0]) :  ] 
+    df_train = filtered_data.iloc[0:int(0.75 * filtered_data.shape[0]) ]
+    df_test = filtered_data.iloc[int(0.75 * filtered_data.shape[0]) :  ] 
+
+    df_predictions = filtered_data_footer.copy()
+
+    print("Entrainement")
+    display(df_train.head())
+    print("Validation")
+    display(df_test.head())
+    print("Prédictions")
+    display(df_predictions.head())
     
-    return df_train, df_test
+    return df_train, df_test, df_predictions
 
 
 # %%
@@ -130,32 +154,66 @@ model.summary()
 
 # Fonction pour calculer le MAPE
 def calculate_mape(true_values, predicted_values):
-    return np.mean(np.abs((true_values - predicted_values) / true_values))
+    result = np.mean(np.abs((true_values - predicted_values) / true_values))
+    return tf.convert_to_tensor(result)
+
+class MAPE(tf.keras.metrics.Metric):
+    def __init__(self, name="mape", **kwargs):
+        super(MAPE, self).__init__(name=name, **kwargs)
+        # Initialisation de l'état de la métrique
+        self.mape = self.add_weight(name="mape", initializer="zeros")
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Calcul du MAPE (Mean Absolute Percentage Error)
+        mape_value = np.mean(tf.abs((y_true - y_pred) / y_true))
+        # Mettre à jour la métrique
+        self.mape.assign_add(mape_value)
+
+    def result(self):
+        # Retourner la valeur actuelle de la métrique
+        return self.mape
+
+    def reset_state(self):
+        # Réinitialiser l'état de la métrique (utile entre chaque époque)
+        self.mape.assign(0.)
 
 mrc_sector_list = data['sector_mrc'].unique()
+
+early_stopping = EarlyStopping(
+    monitor='val_loss', 
+    mode='min', 
+    patience=10,          
+    restore_best_weights=True  
+)
+
 
 # Préparer une liste pour stocker les résultats (MAPE, valeurs réelles, prédictions)
 results = []
 all_predictions = {}
+predictions_unseen_data = {}
+
+
+all_predictions = {
+    "Date": list(range(len(data['date'].unique()))),  # Date commune à toutes les MRC
+    "MRCs": {}  # Un sous-dictionnaire pour chaque MRC
+}
 
 # Boucle sur chaque combinaison de MRC et secteur
 for mrc in mrc_sector_list:
     try:
         print(f"Entraînement pour MRC_Secteur: {mrc}")
-        df_train, df_test = preprocess_data(data, mrc_sector=mrc)
-        
-
-        
+        df_train, df_test, df_predictions = preprocess_data(data, mrc_sector=mrc)       
         # Créer des générateurs
         train_generator = Generateur(df_train, batch_size=4)
         test_generator = Generateur(df_test, batch_size=4)
-        
+                
         # Réinitialiser le modèle avant chaque entraînement
         model = create_model(input_shape=(11, df_train.shape[1]), output_shape=1)
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
             loss="mean_squared_error",
-            metrics=["mean_absolute_error"]
+            metrics=["mean_absolute_error", MAPE()], 
+            run_eagerly=True
         )
         
         # Entraîner le modèle
@@ -163,6 +221,7 @@ for mrc in mrc_sector_list:
             x=train_generator,
             epochs=50,
             validation_data=test_generator,
+            callbacks=[early_stopping],
             verbose=1
         )
         
@@ -187,8 +246,8 @@ for mrc in mrc_sector_list:
 
         # Mean Absolute Error (MAE)
         plt.subplot(1, 2, 2)
-        plt.plot(epochs, history_dict['mean_absolute_error'], 'bo-', label='MAE d\'entraînement')
-        plt.plot(epochs, history_dict['val_mean_absolute_error'], 'ro-', label='MAE de validation')
+        plt.plot(epochs, history_dict['mape'], 'bo-', label='MAE d\'entraînement')
+        plt.plot(epochs, history_dict['val_mape'], 'ro-', label='MAE de validation')
         plt.title(f'Évolution de l\'erreur absolue moyenne (MAE) - {mrc}')
         plt.xlabel('Époques')
         plt.ylabel('MAE')
@@ -200,75 +259,132 @@ for mrc in mrc_sector_list:
         plt.savefig(f"Resultats_Training/training_metrics_{mrc}.png", format='png')
         plt.show()
         
+        data_jumelage = pd.concat([df_train, df_test,df_predictions],axis=0)
+
+        # Prédictions sur l'ensemble des données
+        all_inputs = Generateur(data_jumelage, batch_size=1)
+        predictions_all_inputs = model.predict(all_inputs)
+        predictions_all_inputs = np.exp(predictions_all_inputs)
+        
+        true_values_all_full = all_inputs.y.flatten()
+        true_values_all_full = np.exp(true_values_all_full)
+        
+        # Calcul du MAE
+        mae = mean_absolute_error(true_values_all_full, predictions_all_inputs)
+
+        # Calcul du RMSE
+        rmse = np.sqrt(mean_squared_error(true_values_all_full, predictions_all_inputs))
+        
+        # Mape
+        mape = calculate_mape(true_values_all_full, predictions_all_inputs)
+               
+        # Créer un DataFrame pour les visualisations
+        
+        df_results_full = pd.DataFrame({
+            "Date": range(len(true_values_all_full)),
+            "Valeurs Réelles": true_values_all_full.flatten(),
+            "Prédictions": predictions_all_inputs.flatten()
+        })
+        
+        # Ajouter les données pour une MRC spécifique
+        all_predictions["MRCs"][mrc] = {
+            "Valeurs Réelles": true_values_all_full.flatten().tolist(),
+            "Prédictions": predictions_all_inputs.flatten().tolist(),
+            "MAE": mae,
+            "RMSE": rmse,
+            "MAPE": mape.numpy()
+        }
+        
+        # Préparer les données pour le tableau
+        error_summary = {
+            "MRC": [],
+            "MAE": [],
+            "RMSE": [],
+            "MAPE": []
+        }
+
+        # Parcourir le dictionnaire pour extraire les erreurs
+        for mrc, metrics in all_predictions["MRCs"].items():
+            error_summary["MRC"].append(mrc)
+            error_summary["MAE"].append(metrics["MAE"])
+            error_summary["RMSE"].append(metrics["RMSE"])
+            error_summary["MAPE"].append(metrics["MAPE"])
+
+        # Définir les plages de couleurs
+        colors = ["black", "blue", "green"]
+
+        # Diviser les données en segments selon les plages
+        segments = [
+            {"start": 0, "end": 71, "color": colors[0]},
+            {"start": 72, "end": 83, "color": colors[1]},
+            {"start": 84, "end": len(df_results_full) - 1, "color": colors[2]},
+        ]
+
+        # Créer le graphique
+        fig = go.Figure()
+
+        # Ajouter les segments pour les Valeurs Réelles
+        for segment in segments:
+            start, end, color = segment.values()
+            fig.add_trace(
+                go.Scatter(
+                    x=df_results_full["Date"][start:end + 1],
+                    y=df_results_full["Valeurs Réelles"][start:end + 1],
+                    mode="lines",
+                    name="Valeurs Réelles",
+                    line=dict(color=color)
+                )
+            )
+
+        # Ajouter les segments pour les Prédictions
+        for segment in segments:
+            start, end, color = segment.values()
+            fig.add_trace(
+                go.Scatter(
+                    x=df_results_full["Date"][start:end + 1],
+                    y=df_results_full["Prédictions"][start:end + 1],
+                    mode="lines",
+                    name="Prédictions",
+                    line=dict(color=color, dash="dot")
+                )
+            )
+
+        # Mettre à jour les titres et étiquettes
+        fig.update_layout(
+            title="Comparaison des Prédictions et des Valeurs Réelles",
+            xaxis_title="Date",
+            yaxis_title="Valeur (kWh)",
+            legend_title="Séries"
+        )
+
+        # # Sauvegarder le graphique sous forme d'image
+        # fig.write_image("Resultats_Training/comparaison_predictions_valeurs_reelles.png", format="png")
+
+        # Afficher le graphique
+        fig.show()
+        
+        
         
 
 
-
-        # 7.1. Générer des prédictions sur l'ensemble de test
-        prediction_generator = Generateur(pd.concat([df_train, df_test], axis=0), batch_size=1, window_size=11)  
-        predictions = model.predict(prediction_generator)
-        predictions = np.exp(predictions)  # Revenir à la valeur d'origine 
-                
-        # Récupérer les vraies valeurs de `y` pour tout le dataset
-        true_values_full = np.exp(prediction_generator.y)
-        mape = calculate_mape(true_values_full, predictions)
-
-        # Sauvegarder les prédictions et les vraies valeurs dans le dictionnaire
-        all_predictions[f"{mrc}"] = {
-            "true_values": true_values_full.flatten(),
-            "predictions": predictions.flatten(),
-            "mape": mape
-        }    
 
     except ValueError as e:
         print(f"Erreur pour {mrc}: {e}")
 
 
 
+#%%
+# Créer un DataFrame Pandas
+error_df = pd.DataFrame(error_summary)
+
+# Afficher le tableau
+print(error_df)
+
+# Sauvegarder le tableau en CSV si nécessaire
+error_df.to_csv("Resultats_Training/error_summary.csv", index=False)
+
 
 
 #%%
-
-for mrc in mrc_list:
-    try:
-        # Accéder aux prédictions et vraies valeurs depuis all_predictions
-        predictions = all_predictions[f"{mrc}"]['predictions']
-        true_values = all_predictions[f"{mrc}"]['true_values']
-        
-        # Ajouter les résultats dans la liste
-        for i in range(len(true_values)):
-            results.append({
-                "Date": i,
-                "MRC_Secteur": mrc,
-                "Valeurs Réelles": true_values[i],
-                "Prédictions": predictions[i]
-            })
-    except KeyError as e:
-        print(f"Erreur pour {mrc}: {e}")
-        
-# Convertir la liste en DataFrame
-df_results = pd.DataFrame(results)
-
-# 2. Créer le graphique interactif avec Plotly
-fig = px.line(
-    df_results, 
-    x="Date", 
-    y=["Valeurs Réelles", "Prédictions"], 
-    color="Secteur", 
-    facet_col="MRC",  # Séparer les graphes par MRC
-    title="Comparaison des Prédictions et des Valeurs Réelles par MRC et Secteur",
-    labels={"value": "Consommation (kWh)", "variable": "Série"}
-)
-
-df_results.to_csv("Resultats_Training/score.csv")
-
-# 3. Personnaliser les lignes des prédictions
-fig.update_traces(
-    selector=dict(name="Prédictions"), 
-    line=dict(dash="dot")
-)
-
-# 4. Afficher le graphique interactif
-fig.show()
 
 #%%
