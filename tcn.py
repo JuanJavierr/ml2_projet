@@ -1,6 +1,19 @@
 # %%
-from utils import *
 import numpy as np
+import optuna
+import pandas as pd
+import torch
+from darts import TimeSeries
+from darts.dataprocessing.transformers import Scaler
+from darts.metrics import mape, smape
+from darts.models import TCNModel
+from darts.utils.likelihood_models import LaplaceLikelihood
+from optuna.integration import PyTorchLightningPruningCallback
+from optuna.visualization import (plot_contour, plot_optimization_history,
+                                  plot_param_importances)
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+
+from utils import *
 
 #### Data loading and preprocessing
 df = load_data()
@@ -23,18 +36,9 @@ df = df.rename(columns={"ANNEE_MOIS": "date"})
 
 
 # %%
-def convert_date_to_timeindex(df):
-    # Adds a column to df representing the time index
-    df["date"] = df["date"].dt.to_period("M")
-    min_date = df["date"].min()
-
-    # Convert from days to months
-    df['time_index'] = (df['date'].dt.year - min_date.year) * 12 + (df['date'].dt.month - min_date.month)
-    return df
 
 
-df = df[df["date"] < pd.to_datetime("2023-01-01")]
-# df = convert_date_to_timeindex(df)
+# df = df[df["date"] < pd.to_datetime("2023-01-01")]
 df = df.drop(columns=[ "sector"])
 df["log_volume"] = np.log(df.total_kwh)
 df = df.sort_values(['sector_mrc', 'date'])
@@ -44,38 +48,20 @@ df[["total_kwh", "log_volume", "tavg"]] = df[["total_kwh", "log_volume", "tavg"]
 
 # %%
 #### Dataset preparation
-import torch
-import pandas as pd
-import numpy as np
-from darts import TimeSeries
-from darts.models import TCNModel
-from darts.dataprocessing.transformers import Scaler
-from darts.metrics import mape, smape
-from darts.utils.timeseries_generation import datetime_attribute_timeseries
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
-# stop training when validation loss does not decrease more than 0.05 (`min_delta`) over
-# a period of 5 epochs (`patience`)
-my_stopper = EarlyStopping(
-    monitor="val_loss",
-    patience=5,
-    min_delta=0.05,
-    mode='min',
-)
-
-
 series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='log_volume', time_col='date')
 temp_series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='tavg', time_col='date')
 
 scaler = Scaler(global_fit=False)
+temp_scaler = Scaler()
 series = scaler.fit_transform(series)
+temp_series = temp_scaler.fit_transform(temp_series)
 
 # %%
 def train_test_split(series):
     train_series_list = []
     val_series_list = []
     for serie in series:
-        train, val = serie.split_before(pd.Timestamp("2022-01-01"))
+        train, val = serie.split_before(pd.Timestamp("2023-01-01"))
         train_series_list.append(train)
         val_series_list.append(val)
 
@@ -87,29 +73,7 @@ train_temp_series, val_temp_series = train_test_split(temp_series)
 
 # %%
 
-
-from darts.models import TCNModel
-from darts.utils.likelihood_models import LaplaceLikelihood
-
-
 val_len = 12
-
-# model = TCNModel(
-#     input_chunk_length=24,
-#     output_chunk_length=1,
-#     random_state=42,
-#     # likelihood=LaplaceLikelihood(),
-#     pl_trainer_kwargs={"callbacks": [my_stopper]}
-# )
-
-# model.fit(
-#         series,
-#         verbose=True,
-#         epochs=100,
-#         past_covariates=[train_temp_series],
-#         val_series=val_series,
-#         val_past_covariates=[val_temp_series],
-#         )
 
 
 def build_fit_tcn_model(
@@ -121,7 +85,7 @@ def build_fit_tcn_model(
     dilation_base,
     dropout,
     lr,
-    include_dayofweek,
+    num_layers,
     likelihood=None,
     callbacks=None,
 ):
@@ -136,7 +100,7 @@ def build_fit_tcn_model(
     # MAX_SAMPLES_PER_TS = 1000
 
     # throughout training we'll monitor the validation loss for early stopping
-    early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=3, verbose=True)
+    early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=3)
     if callbacks is None:
         callbacks = [early_stopper]
     else:
@@ -167,6 +131,7 @@ def build_fit_tcn_model(
         nr_epochs_val_period=NR_EPOCHS_VAL_PERIOD,
         kernel_size=kernel_size,
         num_filters=num_filters,
+        num_layers=num_layers,
         weight_norm=weight_norm,
         dilation_base=dilation_base,
         dropout=dropout,
@@ -185,11 +150,15 @@ def build_fit_tcn_model(
     model_val_set = scaler.transform(
         [s[-((2 * val_len) + in_len) : -val_len] for s in series]
     )
+    print(len(model_val_set))
+    model_val_temp = [s[-((2 * val_len) + in_len) : -val_len] for s in temp_series]
 
     # train the model
     model.fit(
         series=train,
+        past_covariates=train_temp_series,
         val_series=model_val_set,
+        val_past_covariates=model_val_temp,
         # max_samples_per_ts=MAX_SAMPLES_PER_TS,
         dataloader_kwargs={"num_workers": num_workers},
     )
@@ -200,26 +169,26 @@ def build_fit_tcn_model(
     return model
 
 
-# # %%
-# model = build_fit_tcn_model(
-#     in_len=24,
-#     out_len=1,
-#     kernel_size=5,
-#     num_filters=5,
-#     weight_norm=False,
-#     dilation_base=2,
-#     dropout=0.2,
-#     lr=1e-3,
-#     include_dayofweek=True,
-# )
+# %%
+model = build_fit_tcn_model(
+    in_len=12,
+    out_len=1,
+    kernel_size=8,
+    num_filters=24,
+    weight_norm=True,
+    dilation_base=4,
+    dropout=0.4,
+    lr=2e-4,
+    num_layers=3,
+)
 
 
 # %%
 import matplotlib.pyplot as plt
 
 def eval_model(preds, name, train_set=train_series, val_set=val_series):
-    smapes = smape(preds, val_set)
-    print("{} sMAPE: {:.2f} +- {:.2f}".format(name, np.mean(smapes), np.std(smapes)))
+    smapes = mape(preds, val_set)
+    print("{} MAPE: {:.2f} +- {:.2f}".format(name, np.mean(smapes), np.std(smapes)))
 
     for i in [10, 50, 100, 150, 250, 350]:
         plt.figure(figsize=(15, 5))
@@ -228,37 +197,30 @@ def eval_model(preds, name, train_set=train_series, val_set=val_series):
         preds[i].plot(label="forecast")
 
 
-# model = model.predict(series=train_series, n=val_len)
-# eval_model(model, "tcn")
+preds = model.predict(series=train_series, n=val_len, past_covariates=temp_series)
+eval_model(preds, "tcn")
 
 
 # %%
-import optuna
-from optuna.integration import PyTorchLightningPruningCallback
-from optuna.visualization import (
-    plot_optimization_history,
-    plot_contour,
-    plot_param_importances,
-)
 
 def objective(trial):
-    callback = [PyTorchLightningPruningCallback(trial, monitor="val_loss")]
-
-    # set input_chunk_length, between 5 and 14 days
-    months_in = trial.suggest_int("months_in", 5, 14)
+    # callback = [PyTorchLightningPruningCallback(trial, monitor="val_loss")]
+    callback = []
+    months_in = 12 # trial.suggest_int("months_in", 3, 12)
 
     # set out_len, between 1 and 13 days (it has to be strictly shorter than in_len).
-    months_out = trial.suggest_int("months_out", 1, months_in - 1)
+    months_out = 1 #trial.suggest_int("months_out", 1, 3)
     out_len = months_out
 
     # Other hyperparameters
-    kernel_size = trial.suggest_int("kernel_size", 5, 25)
-    num_filters = trial.suggest_int("num_filters", 5, 25)
+    kernel_size = trial.suggest_int("kernel_size", 3, 11)
+    num_filters = trial.suggest_int("num_filters", 6, 25)
     weight_norm = trial.suggest_categorical("weight_norm", [False, True])
     dilation_base = trial.suggest_int("dilation_base", 2, 4)
-    dropout = trial.suggest_float("dropout", 0.0, 0.4)
-    lr = trial.suggest_float("lr", 5e-5, 1e-3, log=True)
-    include_dayofweek = trial.suggest_categorical("dayofweek", [False, True])
+    dropout = trial.suggest_float("dropout", 0.1, 0.4)
+    lr = trial.suggest_float("lr", 0.0001, 0.005, log=True)
+    num_layers = trial.suggest_int("num_layers", 1, 3)
+    # include_dayofweek = trial.suggest_categorical("dayofweek", [False, True])
 
     # Force kernel_size to be smaller than in_len
     kernel_size = min(kernel_size, months_in) - 1
@@ -273,13 +235,27 @@ def objective(trial):
         dilation_base=dilation_base,
         dropout=dropout,
         lr=lr,
-        include_dayofweek=include_dayofweek,
+        num_layers=num_layers,
         callbacks=callback,
     )
 
     # Evaluate how good it is on the validation set
     # Forecast 1-step ahead for each series in the validation set
-    preds = model.predict(series=train_series, n=val_len)
+
+
+    full_series = []
+    for i, train_serie in enumerate(train_series):
+        full_series.append(train_serie.append(val_series[i]))
+
+    preds = model.historical_forecasts(
+        series=full_series,
+        past_covariates=temp_series,
+        forecast_horizon=1,
+        stride=1,
+        retrain=False,
+        start=pd.Timestamp("2022-01-01"),
+        verbose=True,
+    )
     smapes = smape(val_series, preds, n_jobs=-1, verbose=True)
     smape_val = np.mean(smapes)
 
