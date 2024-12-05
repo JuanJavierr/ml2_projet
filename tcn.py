@@ -197,7 +197,17 @@ def eval_model(preds, name, train_set=train_series, val_set=val_series):
         preds[i].plot(label="forecast")
 
 
-preds = model.predict(series=train_series, n=val_len, past_covariates=temp_series)
+# preds = model.predict(series=train_series, n=val_len, past_covariates=temp_series)
+preds = model.historical_forecasts(
+    series=series,
+    past_covariates=temp_series,
+    forecast_horizon=1,
+    stride=1,
+    retrain=False,
+    start=pd.Timestamp("2023-01-01"),
+)
+
+# preds = scaler.inverse_transform(preds)
 eval_model(preds, "tcn")
 
 
