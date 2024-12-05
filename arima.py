@@ -37,24 +37,6 @@ def get_consumption_for(df: pd.DataFrame, mrc, sector):
     df["month"] = df.index.month.astype(str)
     return df
 
-    # # Convert types
-    # # df.loc[:, "Total (kWh)"] = df["Total (kWh)"].astype(float)
-    # df.loc[:, "ANNEE_MOIS"] = pd.to_datetime(df["ANNEE_MOIS"])
-    # df = df.set_index(df["ANNEE_MOIS"].infer_objects()).sort_index()
-
-    # # Standardize column names
-    # df["total_mwh"] = df["total_kwh"] / 1000
-
-    # # Set frequency
-    # df = df.dropna().asfreq("MS")
-
-    # # Add helper columns
-    # df["month"] = df.index.month.astype(str)
-
-    # weather_df = pd.read_csv("weather.csv")
-    # df = pd.merge(df, weather_df, left_index=True, right_index=True)
-    return df.dropna()
-
 
 def acf_pacf(series: pd.Series):
     fig, axes = plt.subplots(1, 2, figsize=(15, 4))
@@ -174,13 +156,30 @@ def plot_predictions(test_df, fore):
 if __name__ == "__main__":
 
     formulas = {
-        # "month": "total_kwh ~ month",
-        "mean_temp__month": "total_kwh ~ tavg + month",
+        "month": "total_kwh ~ tavg",
+        # "mean_temp__month": "total_kwh ~ tavg + month",
     }
 
+    from utils import *
 
-    # full_df = load_data()
-    full_df = pd.read_csv("dataset.csv")
+    #### Data loading and preprocessing
+    df = load_data()
+    mapping = fetch_geolocation_data(df)
+
+    mapping.loc["Les Appalaches", "lat"] = 46.374163
+    mapping.loc["Les Appalaches", "lng"] = -70.440328
+
+    temp = fetch_temperature_data(mapping)
+    proximity = get_proximity_mapping(mapping)
+    temp = fill_temperature_data(proximity ,temp)
+
+    df = join_dataframes(df, temp)
+    df = remove_incomplete_mrc_sectors(df)
+    df = interpolate_missing_values(df)
+
+    df = df.drop(columns=["REGION_ADM_QC_TXT", "index", "tmin", "tmax", "prcp", "wspd", "pres", "tsun", "time"])
+    full_df = df.rename(columns={"ANNEE_MOIS": "date"})
+
     results_df = pd.DataFrame()
     results_df[["MRC", "SECTOR"]] = full_df[["mrc", "sector"]].drop_duplicates()
 
@@ -189,7 +188,7 @@ if __name__ == "__main__":
             for sector in full_df["sector"].unique():
                 df = get_consumption_for(full_df, mrc, sector)  # Abitibi
                 train_df = df["2016":"2022"]
-                test_df = df["2023":]
+                test_df = df["2023":"2023"]
 
                 try:
                     best_p, best_q = test_models(train_df, formula=formula)
