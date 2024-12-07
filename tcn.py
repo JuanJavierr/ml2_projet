@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
-from darts.metrics import mape, smape
+from darts.metrics import mape, smape, rmse
 from darts.models import TCNModel
 from darts.utils.likelihood_models import LaplaceLikelihood
 from optuna.integration import PyTorchLightningPruningCallback
@@ -15,36 +15,42 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from utils import *
 
-#### Data loading and preprocessing
-df = load_data()
-mapping = fetch_geolocation_data(df)
+# %%
 
-mapping.loc["Les Appalaches", "lat"] = 46.374163
-mapping.loc["Les Appalaches", "lng"] = -70.440328
+def get_data(omit_last_year=False):
+    #### Data loading and preprocessing
+    df = load_data()
+    mapping = fetch_geolocation_data(df)
 
-temp = fetch_temperature_data(mapping)
-proximity = get_proximity_mapping(mapping)
-temp = fill_temperature_data(proximity ,temp)
+    mapping.loc["Les Appalaches", "lat"] = 46.374163
+    mapping.loc["Les Appalaches", "lng"] = -70.440328
 
-df = join_dataframes(df, temp)
-df = remove_incomplete_mrc_sectors(df)
-df = interpolate_missing_values(df)
+    temp = fetch_temperature_data(mapping)
+    proximity = get_proximity_mapping(mapping)
+    temp = fill_temperature_data(proximity ,temp)
 
-df = df.drop(columns=["REGION_ADM_QC_TXT", "index", "tmin", "tmax", "prcp", "wspd", "pres", "tsun", "time", "mrc"])
-df = df.rename(columns={"ANNEE_MOIS": "date"})
+    df = join_dataframes(df, temp)
+    df = remove_incomplete_mrc_sectors(df)
+    df = interpolate_missing_values(df)
 
+    df = df.drop(columns=["REGION_ADM_QC_TXT", "index", "tmin", "tmax", "prcp", "wspd", "pres", "tsun", "time", "mrc"])
+    df = df.rename(columns={"ANNEE_MOIS": "date"})
+
+
+    df = df.drop(columns=[ "sector"])
+    df["log_volume"] = np.log(df.total_kwh)
+    df = df.sort_values(['sector_mrc', 'date'])
+
+    df[["total_kwh", "log_volume", "tavg"]] = df[["total_kwh", "log_volume", "tavg"]].astype(np.float32)
+
+    if omit_last_year:
+        df = df[df["date"] < pd.to_datetime("2023-01-01")]
+
+    return df
 
 
 # %%
-
-
-# df = df[df["date"] < pd.to_datetime("2023-01-01")]
-df = df.drop(columns=[ "sector"])
-df["log_volume"] = np.log(df.total_kwh)
-df = df.sort_values(['sector_mrc', 'date'])
-
-df[["total_kwh", "log_volume", "tavg"]] = df[["total_kwh", "log_volume", "tavg"]].astype(np.float32)
-
+df = get_data(omit_last_year=False) # Don't omit last year since we're testing
 
 # %%
 #### Dataset preparation
@@ -57,24 +63,6 @@ series = scaler.fit_transform(series)
 temp_series = temp_scaler.fit_transform(temp_series)
 
 # %%
-def train_test_split(series):
-    train_series_list = []
-    val_series_list = []
-    for serie in series:
-        train, val = serie.split_before(pd.Timestamp("2023-01-01"))
-        train_series_list.append(train)
-        val_series_list.append(val)
-
-    return train_series_list, val_series_list
-
-train_series, val_series = train_test_split(series)
-train_temp_series, val_temp_series = train_test_split(temp_series)
-
-
-# %%
-
-val_len = 12
-
 
 def build_fit_tcn_model(
     in_len,
@@ -95,12 +83,12 @@ def build_fit_tcn_model(
 
     # some fixed parameters that will be the same for all models
     BATCH_SIZE = 32
-    MAX_N_EPOCHS = 30
+    MAX_N_EPOCHS = 7
     NR_EPOCHS_VAL_PERIOD = 1
     # MAX_SAMPLES_PER_TS = 1000
 
     # throughout training we'll monitor the validation loss for early stopping
-    early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=3)
+    early_stopper = EarlyStopping("val_loss", min_delta=0.0001, patience=3)
     if callbacks is None:
         callbacks = [early_stopper]
     else:
@@ -144,19 +132,16 @@ def build_fit_tcn_model(
         save_checkpoints=True,
     )
 
-    train = [s[: -(2 * val_len)] for s in series]
+    train = [s[: -12] for s in series]
     # when validating during training, we can use a slightly longer validation
     # set which also contains the first input_chunk_length time steps
-    model_val_set = scaler.transform(
-        [s[-((2 * val_len) + in_len) : -val_len] for s in series]
-    )
-    print(len(model_val_set))
-    model_val_temp = [s[-((2 * val_len) + in_len) : -val_len] for s in temp_series]
+    model_val_set = [s[-24 : ] for s in series]
+    model_val_temp = [s[-24 : ] for s in temp_series]
 
     # train the model
     model.fit(
         series=train,
-        past_covariates=train_temp_series,
+        past_covariates=temp_series,
         val_series=model_val_set,
         val_past_covariates=model_val_temp,
         # max_samples_per_ts=MAX_SAMPLES_PER_TS,
@@ -186,30 +171,43 @@ model = build_fit_tcn_model(
 # %%
 import matplotlib.pyplot as plt
 
-def eval_model(preds, name, train_set=train_series, val_set=val_series):
-    smapes = mape(preds, val_set)
-    print("{} MAPE: {:.2f} +- {:.2f}".format(name, np.mean(smapes), np.std(smapes)))
+def evaluate_sector(sector, model, series, temp_series):
+    series = [s for s in series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
+    temp_series = [s for s in temp_series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
 
-    for i in [10, 50, 100, 150, 250, 350]:
-        plt.figure(figsize=(15, 5))
-        train_set[i][0 :].plot()
-        val_set[i].plot(label="actual")
-        preds[i].plot(label="forecast")
+    preds = model.historical_forecasts(
+        series=series,
+        past_covariates=temp_series,
+        forecast_horizon=1,
+        stride=1,
+        retrain=False,
+        start=pd.Timestamp("2023-01-01"),
+        verbose=False
+    )
 
+    # Reverse scaling
+    series = scaler.inverse_transform(series)
+    preds = scaler.inverse_transform(preds)
 
-# preds = model.predict(series=train_series, n=val_len, past_covariates=temp_series)
-preds = model.historical_forecasts(
-    series=series,
-    past_covariates=temp_series,
-    forecast_horizon=1,
-    stride=1,
-    retrain=False,
-    start=pd.Timestamp("2023-01-01"),
-)
+    # Reverse log transformation
+    series = [s.map(np.exp) for s in series]
+    preds = [s.map(np.exp) for s in preds]
 
-# preds = scaler.inverse_transform(preds)
-eval_model(preds, "tcn")
+    smapes = mape(series, preds)
+    rmses = rmse(series, preds)
+    print("{} MAPE: {:.2f} +- {:.2f}".format(sector, np.mean(smapes), np.std(smapes)))
+    print("{} RMSE: {:.2f} +- {:.2f}".format(sector, np.mean(rmses), np.std(rmses)))
 
+    # for i in np.random.choice(range(len(series)), 2):
+    #     plt.figure(figsize=(10, 6))
+    #     series[i].plot(label="actual")
+    #     preds[i].plot(label="forecast")
+    #     plt.title(f"MAPE: {smapes[i]:.2f}")
+    #     plt.legend()
+    #     plt.show()
+
+for sector in ["AGRICOLE", "INDUSTRIEL", "COMMERCIAL", "INSTITUTIONNEL", "RÉSIDENTIEL", ""]:
+    evaluate_sector(sector, model, series, temp_series)
 
 # %%
 
@@ -253,12 +251,12 @@ def objective(trial):
     # Forecast 1-step ahead for each series in the validation set
 
 
-    full_series = []
-    for i, train_serie in enumerate(train_series):
-        full_series.append(train_serie.append(val_series[i]))
-
+    # full_series = []
+    # for i, train_serie in enumerate(train_series):
+    #     full_series.append(train_serie.append(val_series[i]))
+    
     preds = model.historical_forecasts(
-        series=full_series,
+        series=series,
         past_covariates=temp_series,
         forecast_horizon=1,
         stride=1,
@@ -266,7 +264,7 @@ def objective(trial):
         start=pd.Timestamp("2022-01-01"),
         verbose=True,
     )
-    smapes = smape(val_series, preds, n_jobs=-1, verbose=True)
+    smapes = smape(series, preds)
     smape_val = np.mean(smapes)
 
     return smape_val if smape_val != np.nan else float("inf")
@@ -284,6 +282,5 @@ study.optimize(objective, timeout=7200, callbacks=[print_callback])
 
 # Finally, print the best value and best hyperparameters:
 print(f"Best value: {study.best_value}, Best params: {study.best_trial.params}")
-
 
 # %%
