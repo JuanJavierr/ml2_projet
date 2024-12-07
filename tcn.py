@@ -218,6 +218,36 @@ print(results.groupby("sector").mean())
 print(f"Globally, {results[["mape", "rmse"]].mean()}")
 
 
+
+# %%
+
+
+def get_forecast(mrc):
+    series = [s for s in series if s.static_covariates["sector_mrc"].str.endswith(mrc).all()]
+    temp_series = [s for s in temp_series if s.static_covariates["sector_mrc"].str.endswith(mrc).all()]
+
+    preds = model.historical_forecasts(
+        series=series,
+        past_covariates=temp_series,
+        forecast_horizon=1,
+        stride=1,
+        retrain=False,
+        start=pd.Timestamp("2023-01-01"),
+        verbose=False
+    )
+
+    # Reverse scaling
+    series = scaler.inverse_transform(series)
+    preds = scaler.inverse_transform(preds)
+
+    # Reverse log transformation
+    series = [s.map(np.exp) for s in series]
+    preds = [s.map(np.exp) for s in preds]
+
+    return series, preds
+
+
+
 # %%
 #### HHyperparameter optimization
 
