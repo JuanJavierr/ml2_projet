@@ -57,10 +57,10 @@ df = get_data(omit_last_year=False) # Don't omit last year since we're testing
 series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='log_volume', time_col='date')
 temp_series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='tavg', time_col='date')
 
-scaler = Scaler(global_fit=False)
-temp_scaler = Scaler()
-series = scaler.fit_transform(series)
-temp_series = temp_scaler.fit_transform(temp_series)
+# scaler = Scaler()
+# temp_scaler = Scaler()
+# series = scaler.fit_transform(series)
+# temp_series = temp_scaler.fit_transform(temp_series)
 
 # %%
 
@@ -83,7 +83,7 @@ def build_fit_tcn_model(
 
     # some fixed parameters that will be the same for all models
     BATCH_SIZE = 32
-    MAX_N_EPOCHS = 7
+    MAX_N_EPOCHS = 10
     NR_EPOCHS_VAL_PERIOD = 1
     # MAX_SAMPLES_PER_TS = 1000
 
@@ -130,18 +130,22 @@ def build_fit_tcn_model(
         model_name="tcn_model",
         force_reset=True,
         save_checkpoints=True,
+        add_encoders={"transformer": Scaler()}
     )
 
     train = [s[: -12] for s in series]
+    temp_train = [s[: -12] for s in temp_series]
+    print(f"Training max date is: {train[0].end_time()}")
     # when validating during training, we can use a slightly longer validation
     # set which also contains the first input_chunk_length time steps
     model_val_set = [s[-18 : ] for s in series]
     model_val_temp = [s[-18 : ] for s in temp_series]
+    print("Validation max date is: ", model_val_set[0].end_time())
 
     # train the model
     model.fit(
         series=train,
-        past_covariates=temp_series,
+        past_covariates=temp_train,
         val_series=model_val_set,
         val_past_covariates=model_val_temp,
         # max_samples_per_ts=MAX_SAMPLES_PER_TS,
@@ -185,9 +189,9 @@ def evaluate(model, series, temp_series):
         verbose=False
     )
 
-    # Reverse scaling
-    series = scaler.inverse_transform(series)
-    preds = scaler.inverse_transform(preds)
+    # # Reverse scaling
+    # series = scaler.inverse_transform(series)
+    # preds = scaler.inverse_transform(preds)
 
     # Reverse log transformation
     series = [s.map(np.exp) for s in series]
@@ -198,12 +202,17 @@ def evaluate(model, series, temp_series):
     print("MAPE: {:.2f} +- {:.2f}".format(np.mean(smapes), np.std(smapes)))
     print("RMSE: {:.2f} +- {:.2f}".format(np.mean(rmses), np.std(rmses)))
 
-    for i in np.random.choice(range(len(series)), 2):
+    for i in np.random.choice(range(len(series)), 20):
         plt.figure(figsize=(10, 6))
         series[i].plot(label="actual")
         preds[i].plot(label="forecast")
-        plt.title(f"MAPE: {smapes[i]:.2f}")
+        plt.title(f"MAPE: {smapes[i]:.2f} - Sector: {series[i].static_covariates['sector_mrc'].iloc[0]}")
         plt.legend()
+        # Show dots  and lines
+        plt.scatter(series[i].time_index, series[i].values(), color='black', s=10)
+        # Disable scientific notation
+        plt.ticklabel_format(style='plain', axis='y')
+        plt.ylim(0, 1.1 * max(series[i].values()))
         plt.show()
 
     return smapes, rmses
@@ -212,6 +221,9 @@ def evaluate(model, series, temp_series):
 mapes, rmses = evaluate(model, series, temp_series)
 sectors = [s.static_covariates["sector_mrc"].iloc[0].split("_")[0] for s in series]
 # %%
+# disable pandas scientific notation
+pd.set_option('display.float_format', lambda x: '%.3f' % x)
+
 results = pd.DataFrame(dict(sector=sectors, mape=mapes, rmse=rmses))
 
 print(results.groupby("sector").mean())
@@ -236,9 +248,9 @@ def get_forecast(mrc, series, temp_series, model):
         verbose=False
     )
 
-    # Reverse scaling
-    series = scaler.inverse_transform(series)
-    preds = scaler.inverse_transform(preds)
+    # # Reverse scaling
+    # series = scaler.inverse_transform(series)
+    # preds = scaler.inverse_transform(preds)
 
     # Reverse log transformation
     series = [s.map(np.exp) for s in series]
