@@ -135,8 +135,8 @@ def build_fit_tcn_model(
     train = [s[: -12] for s in series]
     # when validating during training, we can use a slightly longer validation
     # set which also contains the first input_chunk_length time steps
-    model_val_set = [s[-24 : ] for s in series]
-    model_val_temp = [s[-24 : ] for s in temp_series]
+    model_val_set = [s[-18 : ] for s in series]
+    model_val_temp = [s[-18 : ] for s in temp_series]
 
     # train the model
     model.fit(
@@ -171,10 +171,10 @@ model = build_fit_tcn_model(
 # %%
 import matplotlib.pyplot as plt
 
-def evaluate_sector(sector, model, series, temp_series):
-    series = [s for s in series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
-    temp_series = [s for s in temp_series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
-
+def evaluate(model, series, temp_series):
+    # series = [s for s in series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
+    # temp_series = [s for s in temp_series if s.static_covariates["sector_mrc"].str.startswith(sector).all()]
+    # print(f"Evaluating sector {sector} with {len(series)} series")
     preds = model.historical_forecasts(
         series=series,
         past_covariates=temp_series,
@@ -195,21 +195,44 @@ def evaluate_sector(sector, model, series, temp_series):
 
     smapes = mape(series, preds)
     rmses = rmse(series, preds)
-    print("{} MAPE: {:.2f} +- {:.2f}".format(sector, np.mean(smapes), np.std(smapes)))
-    print("{} RMSE: {:.2f} +- {:.2f}".format(sector, np.mean(rmses), np.std(rmses)))
+    print("MAPE: {:.2f} +- {:.2f}".format(np.mean(smapes), np.std(smapes)))
+    print("RMSE: {:.2f} +- {:.2f}".format(np.mean(rmses), np.std(rmses)))
 
-    # for i in np.random.choice(range(len(series)), 2):
-    #     plt.figure(figsize=(10, 6))
-    #     series[i].plot(label="actual")
-    #     preds[i].plot(label="forecast")
-    #     plt.title(f"MAPE: {smapes[i]:.2f}")
-    #     plt.legend()
-    #     plt.show()
+    for i in np.random.choice(range(len(series)), 2):
+        plt.figure(figsize=(10, 6))
+        series[i].plot(label="actual")
+        preds[i].plot(label="forecast")
+        plt.title(f"MAPE: {smapes[i]:.2f}")
+        plt.legend()
+        plt.show()
 
-for sector in ["AGRICOLE", "INDUSTRIEL", "COMMERCIAL", "INSTITUTIONNEL", "RÉSIDENTIEL", ""]:
-    evaluate_sector(sector, model, series, temp_series)
+    return smapes, rmses
+
+
+mapes, rmses = evaluate(model, series, temp_series)
+sectors = [s.static_covariates["sector_mrc"].iloc[0].split("_")[0] for s in series]
+# %%
+results = pd.DataFrame(dict(sector=sectors, mape=mapes, rmse=rmses))
+
+print(results.groupby("sector").mean())
+print(f"Globally, {results[["mape", "rmse"]].mean()}")
+
 
 # %%
+#### HHyperparameter optimization
+
+df = get_data(omit_last_year=True) # Omit last year since we're optimizing
+
+#### Dataset preparation
+series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='log_volume', time_col='date')
+temp_series = TimeSeries.from_group_dataframe(df, group_cols=['sector_mrc'], value_cols='tavg', time_col='date')
+
+scaler = Scaler(global_fit=False)
+temp_scaler = Scaler()
+series = scaler.fit_transform(series)
+temp_series = temp_scaler.fit_transform(temp_series)
+
+
 
 def objective(trial):
     # callback = [PyTorchLightningPruningCallback(trial, monitor="val_loss")]
