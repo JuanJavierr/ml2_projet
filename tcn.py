@@ -222,7 +222,7 @@ print(f"Globally, {results[["mape", "rmse"]].mean()}")
 # %%
 
 
-def get_forecast(mrc):
+def get_forecast(mrc, series, temp_series, model):
     series = [s for s in series if s.static_covariates["sector_mrc"].str.endswith(mrc).all()]
     temp_series = [s for s in temp_series if s.static_covariates["sector_mrc"].str.endswith(mrc).all()]
 
@@ -244,10 +244,23 @@ def get_forecast(mrc):
     series = [s.map(np.exp) for s in series]
     preds = [s.map(np.exp) for s in preds]
 
-    return series, preds
+    
+
+    return preds
 
 
+drummond_preds = get_forecast("Drummond", series, temp_series, model)
+lesetchemins_preds = get_forecast("Les Etchemins", series, temp_series, model)
 
+# %%
+results_df = pd.DataFrame()
+for i in drummond_preds:
+    results_df[i.static_covariates_values()[0][0]] = i.pd_dataframe()
+
+for i in lesetchemins_preds:
+    results_df[i.static_covariates_values()[0][0]] = i.pd_dataframe()
+
+results_df.to_csv("tcn_preds.csv")
 # %%
 #### HHyperparameter optimization
 
